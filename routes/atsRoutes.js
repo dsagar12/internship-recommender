@@ -1,27 +1,23 @@
 import express from "express";
 import multer from "multer";
-import pdfParse from "pdf-parse";
+import pdfParse from "pdf-parse/lib/pdf-parse.js"; // ✅ Cloud-safe import
 import { PDFDocument, rgb } from "pdf-lib";
 
 const router = express.Router();
+const upload = multer({ storage: multer.memoryStorage() }); // ✅ Memory storage (safe for Render)
 
-// Use memory storage (safe for cloud deployment like Render)
-const storage = multer.memoryStorage();
-const upload = multer({ storage });
-
-// Stop words (words to ignore during keyword extraction)
+// ❌ Common words to skip in keyword extraction
 const stopWords = new Set([
   "and", "or", "the", "to", "a", "of", "in", "on", "for", "with", "is", "are", "you", "your",
   "this", "that", "we", "as", "an", "be", "will", "should", "have", "has", "it", "at", "our",
   "us", "by", "from", "their", "they", "but", "if", "about", "into", "more", "can", "also"
 ]);
 
-// ✅ Extract keywords from JD
-const extractKeywordsFromJD = (description) => {
-  if (!description) return [];
-
+// 🔍 Extract JD keywords
+const extractKeywordsFromJD = (description = "") => {
   const wordFrequency = {};
-  const words = description.toLowerCase()
+  const words = description
+    .toLowerCase()
     .replace(/[^\w\s\.\+#]/g, "")
     .split(/\s+/);
 
@@ -36,26 +32,24 @@ const extractKeywordsFromJD = (description) => {
     .slice(0, 15);
 };
 
-// 🎯 Score calculation
+// 📊 ATS score calculation
 const calculateATSScore = (resumeText, keywords) => {
   const resume = resumeText.toLowerCase();
-  const matched = keywords.filter(keyword => resume.includes(keyword));
+  const matched = keywords.filter(keyword => resume.includes(keyword.toLowerCase()));
   const score = Math.round((matched.length / keywords.length) * 100);
   return { score, matched };
 };
 
-// 🖍️ Highlight keywords on resume
+// 🖍️ Add missing keywords in resume PDF
 const highlightKeywordsInPDF = async (pdfBuffer, keywords) => {
   const pdfDoc = await PDFDocument.load(pdfBuffer);
-  const pages = pdfDoc.getPages();
-  const firstPage = pages[0];
+  const page = pdfDoc.getPages()[0];
+  const { height } = page.getSize();
 
-  const { height } = firstPage.getSize();
-
-  keywords.slice(0, 5).forEach((kw, idx) => {
-    firstPage.drawText(`🔍 ${kw}`, {
+  keywords.slice(0, 5).forEach((kw, i) => {
+    page.drawText(`🔍 ${kw}`, {
       x: 50,
-      y: height - 60 - idx * 18,
+      y: height - 60 - i * 20,
       size: 12,
       color: rgb(1, 0, 0),
     });
@@ -64,25 +58,21 @@ const highlightKeywordsInPDF = async (pdfBuffer, keywords) => {
   return await pdfDoc.save();
 };
 
-// 📥 ATS upload route
+// 📥 Upload Resume & Analyze ATS Score
 router.post("/upload", upload.single("resume"), async (req, res) => {
   try {
+    if (!req.file) return res.status(400).json({ error: "No resume uploaded." });
+
     const jobDescription = req.body.jobDescription || "";
-
-    if (!req.file) {
-      return res.status(400).json({ error: "No resume file uploaded." });
-    }
-
     const pdfData = await pdfParse(req.file.buffer);
     const resumeText = pdfData.text.replace(/\s+/g, " ").trim();
 
     if (!resumeText || resumeText.length < 30) {
-      return res.status(400).json({ error: "Resume content is too short." });
+      return res.status(400).json({ error: "Resume is too short or empty." });
     }
 
     const jdKeywords = extractKeywordsFromJD(jobDescription);
     const { score, matched } = calculateATSScore(resumeText, jdKeywords);
-
     const missing = jdKeywords.filter(k => !matched.includes(k));
     const suggestions = missing.map(k => `Consider adding "${k}" to your resume.`);
 
@@ -91,32 +81,27 @@ router.post("/upload", upload.single("resume"), async (req, res) => {
       matchedKeywords: matched,
       missingKeywords: missing,
       usedKeywords: jdKeywords,
-      suggestions
+      suggestions,
     });
-
   } catch (err) {
     console.error("❌ ATS Error:", err.message);
     res.status(500).json({ error: "Error analyzing resume." });
   }
 });
 
-// 📄 Annotate resume with missing keywords
+// ✍️ Annotate Resume with Missing Keywords
 router.post("/annotate", upload.single("resume"), async (req, res) => {
   try {
+    if (!req.file) return res.status(400).json({ error: "No resume uploaded." });
+
     const jobDescription = req.body.jobDescription || "";
-
-    if (!req.file) {
-      return res.status(400).json({ error: "No resume file uploaded." });
-    }
-
-    const pdfBuffer = req.file.buffer;
-    const pdfData = await pdfParse(pdfBuffer);
+    const pdfData = await pdfParse(req.file.buffer);
     const resumeText = pdfData.text.replace(/\s+/g, " ").trim();
 
     const jdKeywords = extractKeywordsFromJD(jobDescription);
-    const missingKeywords = jdKeywords.filter(k => !resumeText.includes(k));
+    const missingKeywords = jdKeywords.filter(k => !resumeText.toLowerCase().includes(k.toLowerCase()));
 
-    const updatedPdf = await highlightKeywordsInPDF(pdfBuffer, missingKeywords);
+    const updatedPdf = await highlightKeywordsInPDF(req.file.buffer, missingKeywords);
 
     res.set({
       "Content-Type": "application/pdf",
@@ -124,7 +109,6 @@ router.post("/annotate", upload.single("resume"), async (req, res) => {
     });
 
     res.send(updatedPdf);
-
   } catch (err) {
     console.error("❌ PDF Annotate Error:", err.message);
     res.status(500).json({ error: "Failed to annotate resume." });
