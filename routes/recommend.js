@@ -1,6 +1,6 @@
 import express from "express";
 import multer from "multer";
-import pdfParse from "pdf-parse";
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import natural from "natural";
 import Internship from "../models/internshipModel.js";
 

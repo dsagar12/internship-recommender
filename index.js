@@ -31,7 +31,7 @@ const allowedOrigins = [
   "http://localhost:5173",
   "http://localhost:3000",
   "https://yourfrontend.com",
-  "https://internmate.netlify.app",
+  "https://internmate.netlify.app/",
   "https://internmate.netlify.app/login",
 ];
 

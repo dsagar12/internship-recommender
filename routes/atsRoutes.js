@@ -1,20 +1,25 @@
 import express from "express";
 import multer from "multer";
-import pdfParse from "pdf-parse/lib/pdf-parse.js"; // ✅ Cloud-safe import
+import pdfParse from 'pdf-parse/lib/pdf-parse.js';
 import { PDFDocument, rgb } from "pdf-lib";
 
 const router = express.Router();
-const upload = multer({ storage: multer.memoryStorage() }); // ✅ Memory storage (safe for Render)
 
-// ❌ Common words to skip in keyword extraction
+// 🔧 Use memory storage for Multer
+const storage = multer.memoryStorage();
+const upload = multer({ storage });
+
+// 📚 Set of extra common words to ignore
 const stopWords = new Set([
   "and", "or", "the", "to", "a", "of", "in", "on", "for", "with", "is", "are", "you", "your",
   "this", "that", "we", "as", "an", "be", "will", "should", "have", "has", "it", "at", "our",
   "us", "by", "from", "their", "they", "but", "if", "about", "into", "more", "can", "also"
 ]);
 
-// 🔍 Extract JD keywords
-const extractKeywordsFromJD = (description = "") => {
+// ✅ Extract keywords from job description
+const extractKeywordsFromJD = (description) => {
+  if (!description) return [];
+
   const wordFrequency = {};
   const words = description
     .toLowerCase()
@@ -29,89 +34,99 @@ const extractKeywordsFromJD = (description = "") => {
 
   return Object.keys(wordFrequency)
     .sort((a, b) => wordFrequency[b] - wordFrequency[a])
-    .slice(0, 15);
+    .slice(0, 15); // Top 15 keywords
 };
 
-// 📊 ATS score calculation
+// 🎯 Calculate ATS Score
 const calculateATSScore = (resumeText, keywords) => {
   const resume = resumeText.toLowerCase();
-  const matched = keywords.filter(keyword => resume.includes(keyword.toLowerCase()));
+  const matched = keywords.filter(keyword =>
+    resume.includes(keyword.toLowerCase())
+  );
   const score = Math.round((matched.length / keywords.length) * 100);
   return { score, matched };
 };
 
-// 🖍️ Add missing keywords in resume PDF
+// 🖍️ Highlight missing keywords in PDF
 const highlightKeywordsInPDF = async (pdfBuffer, keywords) => {
   const pdfDoc = await PDFDocument.load(pdfBuffer);
-  const page = pdfDoc.getPages()[0];
-  const { height } = page.getSize();
+  const pages = pdfDoc.getPages();
+  const firstPage = pages[0];
 
-  keywords.slice(0, 5).forEach((kw, i) => {
-    page.drawText(`🔍 ${kw}`, {
+  const { width, height } = firstPage.getSize();
+
+  keywords.slice(0, 5).forEach((kw, idx) => {
+    firstPage.drawText(kw, {
       x: 50,
-      y: height - 60 - i * 20,
+      y: height - 50 - idx * 20,
       size: 12,
       color: rgb(1, 0, 0),
     });
   });
 
-  return await pdfDoc.save();
+  const updatedPdfBytes = await pdfDoc.save();
+  return updatedPdfBytes;
 };
 
-// 📥 Upload Resume & Analyze ATS Score
+// 📥 POST /api/ats/upload
 router.post("/upload", upload.single("resume"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No resume uploaded." });
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded" });
+    }
 
     const jobDescription = req.body.jobDescription || "";
     const pdfData = await pdfParse(req.file.buffer);
     const resumeText = pdfData.text.replace(/\s+/g, " ").trim();
 
     if (!resumeText || resumeText.length < 30) {
-      return res.status(400).json({ error: "Resume is too short or empty." });
+      return res.status(400).json({ error: "Resume content is too short or empty." });
     }
 
     const jdKeywords = extractKeywordsFromJD(jobDescription);
     const { score, matched } = calculateATSScore(resumeText, jdKeywords);
-    const missing = jdKeywords.filter(k => !matched.includes(k));
-    const suggestions = missing.map(k => `Consider adding "${k}" to your resume.`);
+
+    const suggestions = jdKeywords
+      .filter(k => !matched.includes(k))
+      .map(k => `Consider including "${k}" in your resume.`);
 
     res.json({
       score,
       matchedKeywords: matched,
-      missingKeywords: missing,
+      missingKeywords: jdKeywords.filter(k => !matched.includes(k)),
       usedKeywords: jdKeywords,
       suggestions,
     });
   } catch (err) {
-    console.error("❌ ATS Error:", err.message);
-    res.status(500).json({ error: "Error analyzing resume." });
+    console.error("❌ ATS Resume Analysis Error:", err.message);
+    res.status(500).json({ error: "Something went wrong while parsing the resume." });
   }
 });
 
-// ✍️ Annotate Resume with Missing Keywords
+// 🖨️ POST /api/ats/annotate
 router.post("/annotate", upload.single("resume"), async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No resume uploaded." });
-
     const jobDescription = req.body.jobDescription || "";
-    const pdfData = await pdfParse(req.file.buffer);
+    const pdfBuffer = req.file.buffer;
+    const pdfData = await pdfParse(pdfBuffer);
     const resumeText = pdfData.text.replace(/\s+/g, " ").trim();
 
     const jdKeywords = extractKeywordsFromJD(jobDescription);
-    const missingKeywords = jdKeywords.filter(k => !resumeText.toLowerCase().includes(k.toLowerCase()));
+    const missingKeywords = jdKeywords.filter(
+      keyword => !resumeText.toLowerCase().includes(keyword.toLowerCase())
+    );
 
-    const updatedPdf = await highlightKeywordsInPDF(req.file.buffer, missingKeywords);
+    const annotatedPdf = await highlightKeywordsInPDF(pdfBuffer, missingKeywords);
 
     res.set({
       "Content-Type": "application/pdf",
       "Content-Disposition": "attachment; filename=annotated_resume.pdf",
     });
 
-    res.send(updatedPdf);
+    res.send(annotatedPdf);
   } catch (err) {
-    console.error("❌ PDF Annotate Error:", err.message);
-    res.status(500).json({ error: "Failed to annotate resume." });
+    console.error("❌ Annotate Error:", err.message);
+    res.status(500).json({ error: "Failed to annotate PDF." });
   }
 });
 
