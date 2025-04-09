@@ -1,0 +1,28 @@
+# Node modules
+node_modules/
+
+# Env files
+.env
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Uploaded files (if you store resumes locally)
+uploads/
+
+# Build output (if any)
+dist/
+build/
+
+# IDE/editor folders
+.vscode/
+.idea/
+
+# Coverage reports (for testing)
+coverage/

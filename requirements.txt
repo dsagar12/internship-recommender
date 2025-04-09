@@ -1,0 +1,6 @@
+fastapi
+uvicorn
+spacy
+pdfplumber
+pymongo
+scikit-learn
